@@ -1,0 +1,20 @@
+[package]
+name = "chip8"
+version = "0.1.0"
+authors = ["unuzdaq42 <unuzdaq42@gmail.com>"]
+edition = "2018"
+
+[dependencies]
+
+gl = "0.14.0"
+imgui = "0.7.0"
+imgui-sdl2 = "0.14.0"
+imgui-opengl-renderer = "0.11.0"
+
+tinyfiledialogs = "3.8.3"
+
+rand = "0.8.3"
+
+[dependencies.sdl2]
+version = "0.34.5"
+features = [ "bundled", "static-link" ]
