@@ -5,7 +5,7 @@ use rand::{Rng, thread_rng};
 
 use sdl2::keyboard::Scancode;
 
-use imgui::{ColorEdit, Direction, EditableColor, ImStr, ImString, Slider, im_str};
+use imgui::{ColorEdit, Direction, EditableColor, ImString, Slider, im_str};
 
 pub mod renderer;
 mod framebuffer;
