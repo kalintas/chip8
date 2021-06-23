@@ -1,5 +1,5 @@
 
-use rand::{Rng,thread_rng};
+use rand::{Rng, thread_rng};
 
 #[repr(C)]
 #[derive(Default, Clone, Copy, PartialEq, Eq)]

@@ -28,6 +28,7 @@ impl AudioCallback for Callback
     }
 }
 
+// simple struct for square wave generation
 pub struct Beeper
 {
     _audio_subsys: sdl2::AudioSubsystem,

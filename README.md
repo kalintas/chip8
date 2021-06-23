@@ -1,1 +1,1 @@
-chip8 interpreter
+Chip8\SuperChip interpreter
