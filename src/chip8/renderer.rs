@@ -22,7 +22,7 @@ pub struct Renderer
     pub event_pump: EventPump,
 
     pub window: sdl2::video::Window,
-    _video_subsys: sdl2::VideoSubsystem,
+    pub video_subsys: sdl2::VideoSubsystem,
     pub sdl: sdl2::Sdl,
 
     _gl_context: GLContext
@@ -33,14 +33,14 @@ impl Renderer
     pub fn new(title: impl AsRef<str>, width: u32, height: u32) -> Result<Self, Box<dyn Error>>
     {
         let sdl = sdl2::init()?;
-        let _video_subsys = sdl.video()?;
+        let video_subsys = sdl.video()?;
 
-        let gl_attr = _video_subsys.gl_attr();
+        let gl_attr = video_subsys.gl_attr();
 
         gl_attr.set_context_profile(GLProfile::Core);
         gl_attr.set_context_version(3, 3);
 
-        let window = _video_subsys.window(title.as_ref(), width, height)
+        let window = video_subsys.window(title.as_ref(), width, height)
             .opengl()
             .resizable()
             .position_centered()
@@ -49,15 +49,15 @@ impl Renderer
         let event_pump = sdl.event_pump()?;
 
         let _gl_context = window.gl_create_context()?;
-        gl::load_with(|s| _video_subsys.gl_get_proc_address(s) as _);
+        gl::load_with(|s| video_subsys.gl_get_proc_address(s) as _);
 
-        _video_subsys.gl_set_swap_interval(SwapInterval::VSync)?;
+        video_subsys.gl_set_swap_interval(SwapInterval::VSync)?;
 
         let mut imgui = imgui::Context::create();
 
         imgui.set_ini_filename(None);
 
-        let imgui_renderer = ImguiRenderer::new(&mut imgui, |s| _video_subsys.gl_get_proc_address(s) as _);
+        let imgui_renderer = ImguiRenderer::new(&mut imgui, |s| video_subsys.gl_get_proc_address(s) as _);
 
         let imgui_sdl = ImguiSdl2::new(&mut imgui, &window);
 
@@ -69,7 +69,7 @@ impl Renderer
 
             imgui, imgui_sdl, imgui_renderer,
             event_pump, window, 
-            _video_subsys, sdl, _gl_context
+            video_subsys, sdl, _gl_context
         })
     }
 

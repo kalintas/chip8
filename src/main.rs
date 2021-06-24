@@ -6,5 +6,5 @@ use chip8::{Chip8, renderer::Renderer};
 fn main()
 {
 
-    Chip8::new(&mut Renderer::new("chip8 interpreter", 1024, 720).unwrap()).run();
+    Chip8::new(&mut Renderer::new("Chip8/SuperChip Interpreter", 1024, 720).unwrap()).run();
 }

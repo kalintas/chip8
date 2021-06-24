@@ -3,7 +3,7 @@ use std::{fs, mem, path::{Path, PathBuf}, time::Instant, usize};
 
 use rand::{Rng, thread_rng};
 
-use sdl2::keyboard::Scancode;
+use sdl2::{keyboard::Scancode, video::SwapInterval};
 
 use imgui::{ColorEdit, Direction, EditableColor, ImString, Slider, im_str};
 
@@ -74,7 +74,7 @@ struct Config
 
 pub struct Chip8<'a>
 {
-    registers: [u8; 16],            // 16 8-bit register
+    v: [u8; 16],                    // 16 8-bit registers
     flag_registers: [u8; 8],        // special registers, used by FX75* and FX85*
 
     stack: [u16; 16],               // stack for storing pc in subroutines
@@ -91,8 +91,8 @@ pub struct Chip8<'a>
     delay_tick: f64,                
     sound_tick: f64,
 
-    delay_tick_duration: f64,
-    sound_tick_duration: f64,
+    dt_interval: f64,
+    st_interval: f64,
     cycles_per_frame: u32,          
 
     elapsed_time: Instant,          // time elapsed between frames
@@ -101,6 +101,7 @@ pub struct Chip8<'a>
     running: bool,
     waiting_key_input: bool,
     rom_loaded: bool,
+    vsync_open: bool,
 
     current_rom_path: PathBuf,      // path to currently working rom
 
@@ -143,7 +144,7 @@ impl<'a> Chip8<'a>
 
         Self
         {
-            registers:      [0; 16],
+            v: [0; 16],
             flag_registers: [0; 8],
 
             stack:     [0; 16],   
@@ -160,8 +161,8 @@ impl<'a> Chip8<'a>
             delay_tick: delay_tick_duration,
             sound_tick: sound_tick_duration,
  
-            delay_tick_duration, 
-            sound_tick_duration,
+            dt_interval: delay_tick_duration, 
+            st_interval: sound_tick_duration,
             cycles_per_frame: 60,
 
             elapsed_time: Instant::now(),
@@ -169,6 +170,7 @@ impl<'a> Chip8<'a>
             running: true,
             waiting_key_input: false,
             rom_loaded: false,
+            vsync_open: true,
 
             current_rom_path: PathBuf::new(),
 
@@ -176,7 +178,7 @@ impl<'a> Chip8<'a>
             { 
                 shift_behaviour: true, 
                 draw_behaviour: true, 
-                store_behaviour: false 
+                store_behaviour: true 
             },
 
             imgui_error_message: String::new(),
@@ -260,7 +262,7 @@ impl<'a> Chip8<'a>
         {
             if self.r_delay_timer > 0 { self.r_delay_timer -= 1; } 
             
-            self.delay_tick = self.delay_tick_duration;   
+            self.delay_tick = self.dt_interval;   
         }
 
         if self.sound_tick <= 0.0
@@ -275,7 +277,7 @@ impl<'a> Chip8<'a>
                 }
             }
     
-            self.sound_tick = self.sound_tick_duration;
+            self.sound_tick = self.st_interval;
         }
 
     }
@@ -296,6 +298,7 @@ impl<'a> Chip8<'a>
         self.framebuffer.draw_buffer(src, dest);
 
         let mut run_next_opcode = false;
+        let mut vsync_open = self.vsync_open;
 
         // ugly imgui rendering
         renderer.render(|ui| 
@@ -347,14 +350,17 @@ impl<'a> Chip8<'a>
                         self.reset_state();
                     }
 
+                    ui.same_line(0.0);
+                    ui.checkbox(im_str!("vsync"), &mut vsync_open);
+
                     if ui.button(im_str!("*##0"), [0.0, 0.0]) { self.cycles_per_frame = 60 } ui.same_line(0.0);
                     Slider::new(im_str!("Cycles per Frame")).range(0..=1000).build(ui, &mut self.cycles_per_frame);
 
-                    if ui.button(im_str!("*##1"), [0.0, 0.0]) { self.delay_tick_duration = 1.0 / 60.0 } ui.same_line(0.0);
-                    Slider::new(im_str!("Delay Tick Duration")).range(0.0..=1.0).build(ui, &mut self.delay_tick_duration);
+                    if ui.button(im_str!("*##1"), [0.0, 0.0]) { self.dt_interval = 1.0 / 60.0 } ui.same_line(0.0);
+                    Slider::new(im_str!("Delay Tick Interval")).range(0.0..=1.0).build(ui, &mut self.dt_interval);
                     
-                    if ui.button(im_str!("*##2"), [0.0, 0.0]) { self.sound_tick_duration = 1.0 / 60.0 } ui.same_line(0.0);
-                    Slider::new(im_str!("Sound Tick Duration")).range(0.0..=1.0).build(ui, &mut self.sound_tick_duration);                
+                    if ui.button(im_str!("*##2"), [0.0, 0.0]) { self.st_interval = 1.0 / 60.0 } ui.same_line(0.0);
+                    Slider::new(im_str!("Sound Tick Interval")).range(0.0..=1.0).build(ui, &mut self.st_interval);                
 
                     // pause and step over
                     ui.separator();
@@ -422,7 +428,7 @@ impl<'a> Chip8<'a>
 
                 ui.set_window_font_scale(1.3);
 
-                print_registers(&self.registers);
+                print_registers(&self.v);
     
                 ui.text(format!("I : {:#x}", self.r_address));
                 ui.text(format!("DT: {:#x}", self.r_delay_timer));
@@ -488,7 +494,7 @@ impl<'a> Chip8<'a>
                 // BAD!!
                 // give every different sized error message a unique id
                 // otherwise imgui doesnt render it properly
-                popup_id = unsafe { ImString::from_utf8_unchecked([self.imgui_error_message.len() as u8].to_vec()) };
+                popup_id = unsafe { ImString::from_utf8_unchecked(self.imgui_error_message.len().to_ne_bytes().to_vec()) };
                 ui.open_popup(&popup_id);
             }
             
@@ -503,7 +509,7 @@ impl<'a> Chip8<'a>
 
                 if ui.button(im_str!("OK"), [0.0, 0.0]) 
                 {
-                    self.imgui_error_message = Default::default();
+                    self.imgui_error_message = String::new();
 
                     self.reset_state();
 
@@ -512,6 +518,14 @@ impl<'a> Chip8<'a>
             });
         });
         
+        if self.vsync_open != vsync_open
+        {
+            renderer.video_subsys.gl_set_swap_interval(
+                if vsync_open { SwapInterval::VSync } else { SwapInterval::Immediate }).unwrap();
+            
+            self.vsync_open = vsync_open;
+        }
+
         self.renderer = Some(renderer); // dirty hack v2
 
         // this function may use self.renderer so
@@ -530,15 +544,15 @@ impl<'a> Chip8<'a>
 
     fn reset_state(&mut self)
     {
-        self.registers = [0; 16];
+        self.v = [0; 16];
         self.stack     = [0; 16];
         self.sp = 0;
         self.pc = 0x200;   
         self.r_address = 0;
         self.r_delay_timer = 0;
         self.r_sound_timer = 0;
-        self.delay_tick = self.delay_tick_duration;
-        self.sound_tick = self.sound_tick_duration;
+        self.delay_tick = self.dt_interval;
+        self.sound_tick = self.st_interval;
 
         self.rom_loaded = false;
         self.waiting_key_input = false;
@@ -651,7 +665,6 @@ impl<'a> Chip8<'a>
         if value == 0 { false }
         else
         {
-            // sprite drawing is wrapped 
             let pixel = &mut self.screen_buffer[y * S_WIDTH + x];
         
             if *pixel == self.color_off { *pixel = self.color_on;  false }
@@ -683,7 +696,7 @@ impl<'a> Chip8<'a>
             collision |= self.set_pixel(x + t, y + i, color);
         }
 
-        self.registers[0xF] = collision as u8;
+        self.v[0xF] = collision as u8;
     }
 
     // run next instruction 
@@ -702,8 +715,8 @@ impl<'a> Chip8<'a>
             ( lower       & 0xF) as usize
         ];
 
-        let vx = self.registers[nibbles[1]];
-        let vy = self.registers[nibbles[2]];
+        let x = nibbles[1];
+        let y = nibbles[2];
 
         let addr = (((upper & 0xF) as u16) << 8) | lower as u16;
 
@@ -777,79 +790,89 @@ impl<'a> Chip8<'a>
                 }
             }
             0x1 => self.pc = addr,                            // 1NNN -> JP addr
-            0xB => self.pc = addr + self.registers[0] as u16, // BNNN -> JP V0, addr
+            0xB => self.pc = addr + self.v[0] as u16, // BNNN -> JP V0, addr
             
             0x2 => { self.push_pc(); self.pc = addr; } // 2NNN -> CALL addr
             
-            0x3 => if vx == lower { self.pc += 2 }     // 3XNN -> SE  Vx, byte
-            0x4 => if vx != lower { self.pc += 2 }     // 4XNN -> SNE Vx, byte
-            0x5 => if vx == vy    { self.pc += 2 }     // 5XY0 -> SE  Vx, Vy
-            0x9 => if vx != vy    { self.pc += 2 }     // 9XY0 -> SNE Vx, Vy      
+            0x3 => if self.v[x] == lower     { self.pc += 2 }     // 3XNN -> SE  Vx, byte
+            0x4 => if self.v[x] != lower     { self.pc += 2 }     // 4XNN -> SNE Vx, byte
+            0x5 => if self.v[x] == self.v[y] { self.pc += 2 }     // 5XY0 -> SE  Vx, Vy
+            0x9 => if self.v[x] != self.v[y] { self.pc += 2 }     // 9XY0 -> SNE Vx, Vy      
             
-            0x6 => self.registers[nibbles[1]] = lower, // 6XNN -> LD Vx, byte
-            0x7 => self.registers[nibbles[1]] = vx.wrapping_add(lower), // 7XNN -> ADD Vx, byte
+            0x6 => self.v[x] = lower, // 6XNN -> LD Vx, byte
+            0x7 => self.v[x] = self.v[x].wrapping_add(lower), // 7XNN -> ADD Vx, byte
             
             0x8 =>
             {
                 match nibbles[3]
                 {
-                    0x0 => self.registers[nibbles[1]]  = vy, // 8XY0 -> LD Vx, Vy
-                    0x1 => self.registers[nibbles[1]] |= vy, // 8XY1 -> OR Vx, Vy
-                    0x2 => self.registers[nibbles[1]] &= vy, // 8XY2 -> AND Vx, Vy
-                    0x3 => self.registers[nibbles[1]] ^= vy, // 8XY3 -> XOR Vx, Vy
+                    0x0 => self.v[x]  = self.v[y], // 8XY0 -> LD Vx, Vy
+                    0x1 => self.v[x] |= self.v[y], // 8XY1 -> OR Vx, Vy
+                    0x2 => self.v[x] &= self.v[y], // 8XY2 -> AND Vx, Vy
+                    0x3 => self.v[x] ^= self.v[y], // 8XY3 -> XOR Vx, Vy
                     0x4 => // 8XY4 -> ADD Vx, Vy
                     {
-                        let result = vx as u16 + vy as u16;
-                        self.registers[0xF] = (result > 0xFF) as u8;
-                        self.registers[nibbles[1]] = (result % 256) as u8;
+                        let result = self.v[x] as u16 + self.v[y] as u16;
+                        self.v[x] = (result % 256) as u8;
+                        self.v[0xF] = (result > 0xFF) as u8;
                     }
-                    0x5 => { self.registers[nibbles[1]] = vx.wrapping_sub(vy); self.registers[0xF] = (vx >= vy) as u8 }, // 8XY5 -> SUB  Vx, Vy
-                    0x7 => { self.registers[nibbles[1]] = vy.wrapping_sub(vx); self.registers[0xF] = (vy >= vx) as u8 }, // 8XY7 -> SUBN Vx, Vy   
+                    0x5 => // 8XY5 -> SUB  Vx, Vy
+                    { 
+                        let vf = (self.v[x] >= self.v[y]) as u8;
+                        self.v[x] = self.v[x].wrapping_sub(self.v[y]); 
+                        self.v[0xF] = vf; 
+                    }
+                    0x7 => // 8XY7 -> SUBN Vx, Vy
+                    { 
+                        let vf = (self.v[y] >= self.v[x]) as u8;
+                        self.v[x] = self.v[y].wrapping_sub(self.v[x]); 
+                        self.v[0xF] = vf; 
+                    }    
                     0x6 => // 8XY6 -> SHR Vx {, Vy}
                     {
                         if self.config.shift_behaviour
                         {
-                            self.registers[0xF] = vy & 0x1;
-                            self.registers[nibbles[1]] = vy >> 1;
+                            self.v[0xF] = self.v[y] & 0x1;
+                            self.v[x] = self.v[y] >> 1;
                         }
                         else
                         {
-                            self.registers[0xF] = vx & 0x1;
-                            self.registers[nibbles[1]] >>= 1;  
+                            self.v[0xF] = self.v[x] & 0x1;
+                            self.v[x] >>= 1;  
                         }
                     }                       
                     0xE => // 8XYE -> SHL Vx {, Vy}
                     {
                         if self.config.shift_behaviour
                         {
-                            self.registers[0xF] = (vy >> 7) & 0x1;
-                            self.registers[nibbles[1]] = vy << 1; 
+                            self.v[0xF] = (self.v[y] >> 7) & 0x1;
+                            self.v[x] = self.v[y] << 1; 
                         }
                         else
                         {
-                            self.registers[0xF] = (vx >> 7) & 0x1;
-                            self.registers[nibbles[1]] <<= 1;    
+                            self.v[0xF] = (self.v[x] >> 7) & 0x1;
+                            self.v[x] <<= 1;    
                         }
                     }
                     _ => self.unkown_instruction()
                 }
             }
             0xA => self.r_address = addr, // ANNN -> LD I, addr
-            0xC => self.registers[nibbles[1]] = thread_rng().gen::<u8>() & lower, // CXNN -> RND Vx, byte
+            0xC => self.v[x] = thread_rng().gen::<u8>() & lower, // CXNN -> RND Vx, byte
             0xD => // DXYN - DXY0*
             {
                 match nibbles[3]
                 {
-                    0 => self.draw_sprite(vx as usize, vy as usize, 16, 16), // DXY0* -> DRW Vx, Vy, 0
-                    height => self.draw_sprite(vx as usize, vy as usize, 8, height) // DXYN -> DRW Vx, Vy, nibble
+                    0 => self.draw_sprite(self.v[x] as usize, self.v[y] as usize, 16, 16), // DXY0* -> DRW Vx, Vy, 0
+                    height => self.draw_sprite(self.v[x] as usize, self.v[y] as usize, 8, height) // DXYN -> DRW Vx, Vy, nibble
                 }
             }
             0xE => 
             {
                 match lower
                 {
-                    0x9E => if  self.is_key_pressed(KEY_MAP[vx as usize % KEY_MAP.len()]) { self.pc += 2 } // EX9E -> SKP Vx
-                    0xA1 => if !self.is_key_pressed(KEY_MAP[vx as usize % KEY_MAP.len()]) { self.pc += 2 } // EXA1 -> SKNP Vx
+                    0x9E => if  self.is_key_pressed(KEY_MAP[self.v[x] as usize % KEY_MAP.len()]) { self.pc += 2 } // EX9E -> SKP Vx
+                    0xA1 => if !self.is_key_pressed(KEY_MAP[self.v[x] as usize % KEY_MAP.len()]) { self.pc += 2 } // EXA1 -> SKNP Vx
                     _ => self.unkown_instruction()
                 }
             }
@@ -857,65 +880,65 @@ impl<'a> Chip8<'a>
             {
                 match lower
                 {
-                    0x07 => self.registers[nibbles[1]] = self.r_delay_timer,          // FX07 -> LD Vx, DT
+                    0x07 => self.v[x] = self.r_delay_timer,          // FX07 -> LD Vx, DT
                     0x15 => // FX15 -> LD DT, Vx 
                     { 
-                        self.r_delay_timer = vx;  
-                        self.delay_tick = self.delay_tick_duration;
+                        self.r_delay_timer = self.v[x];  
+                        self.delay_tick = self.dt_interval;
                     }
                     0x18 => // FX18 -> LD ST, Vx
                     { 
-                        self.r_sound_timer = vx;
-                        self.sound_tick = self.sound_tick_duration;
+                        self.r_sound_timer = self.v[x];
+                        self.sound_tick = self.st_interval;
 
                         self.beeper.device.resume() 
                     }
-                    0x0A => self.registers[nibbles[1]] = self.wait_key_input() as u8, // FX0A -> LD Vx, K
-                    0x1E => self.r_address += vx as u16,                              // FX1E -> ADD I, Vx
-                    0x29 => self.r_address = vx.min(0xF) as u16 * 5,                  // FX29 -> LD F, Vx
+                    0x0A => self.v[x] = self.wait_key_input() as u8, // FX0A -> LD Vx, K
+                    0x1E => self.r_address += self.v[x] as u16,                              // FX1E -> ADD I, Vx
+                    0x29 => self.r_address = self.v[x].min(0xF) as u16 * 5,                  // FX29 -> LD F, Vx
                     0x30 => // FX30* -> LD HF, Vx
                     {
-                        self.r_address = SMALL_FONT_SIZE as u16 + vx.min(9) as u16 * 10;
+                        self.r_address = SMALL_FONT_SIZE as u16 + self.v[x].min(9) as u16 * 10;
                     }
                     0x33 => // FX33 -> LD B, Vx
                     {
-                        self.memory[self.r_address as usize    ] = (vx / 100) % 10;
-                        self.memory[self.r_address as usize + 1] = (vx / 10)  % 10;
-                        self.memory[self.r_address as usize + 2] =  vx        % 10;
+                        self.memory[self.r_address as usize    ] = (self.v[x] / 100) % 10;
+                        self.memory[self.r_address as usize + 1] = (self.v[x] / 10)  % 10;
+                        self.memory[self.r_address as usize + 2] =  self.v[x]        % 10;
                     }
                     0x55 => // FX55 -> LD [I], Vx
                     { 
                         // store v0..vx to memory starting at I (address register)
 
-                        let len = nibbles[1] + 1;
+                        let len = x + 1;
                         let dest = self.r_address as usize;
 
-                        self.memory[dest..dest + len].copy_from_slice(&self.registers[..len]);
+                        self.memory[dest..dest + len].copy_from_slice(&self.v[..len]);
                         if self.config.store_behaviour { self.r_address += len as u16; }
                     }
                     0x65 => // FX65 -> LD Vx, [I]
                     {
                         // read v0..vx from memory starting at I (address register)
 
-                        let len = nibbles[1] + 1;
+                        let len = x + 1;
                         let src = self.r_address as usize;
                         
-                        self.registers[..len].copy_from_slice(&self.memory[src..src + len]);
+                        self.v[..len].copy_from_slice(&self.memory[src..src + len]);
                         if self.config.store_behaviour { self.r_address += len as u16; }
                     }
                     0x85 => // FX85* -> LD Vx, R
                     {
-                        let vx = vx.min(7) as usize;
+                        let vx = self.v[x].min(7) as usize;
 
                         // restore the registers v0..vx
-                        self.registers[..vx].copy_from_slice(&self.flag_registers[..vx]);
+                        self.v[..vx].copy_from_slice(&self.flag_registers[..vx]);
                     }
                     0x75 => // FX75* -> LD R, Vx
                     {   
-                        let vx = vx.min(7) as usize;
+                        let vx = self.v[x].min(7) as usize;
 
                         // save v0..vx registers to flag registers
-                        self.flag_registers[..vx].copy_from_slice(&self.registers[..vx]);
+                        self.flag_registers[..vx].copy_from_slice(&self.v[..vx]);
                     }
                     _ => self.unkown_instruction()
                 }
